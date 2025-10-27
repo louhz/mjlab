@@ -63,7 +63,7 @@ class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
       (obs, time_step),
       os.path.join(path, filename),
       export_params=True,
-      opset_version=11,
+      opset_version=18,
       verbose=self.verbose,
       input_names=["obs", "time_step"],
       output_names=[
@@ -76,6 +76,7 @@ class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
         "body_ang_vel_w",
       ],
       dynamic_axes={},
+      
     )
 
 

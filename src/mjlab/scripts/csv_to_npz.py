@@ -309,7 +309,7 @@ def run_sim(
         np.savez("/tmp/motion.npz", **log)  # type: ignore[arg-type]
 
         print("Uploading to Weights & Biases...")
-        import wandb
+        import local_wandb as wandb
 
         COLLECTION = output_name
         run = wandb.init(

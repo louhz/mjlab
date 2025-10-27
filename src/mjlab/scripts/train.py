@@ -1,5 +1,12 @@
 """Script to train RL agent with RSL-RL."""
 
+
+from __future__ import annotations
+import json
+import os
+import re
+from pathlib import Path
+from typing import Optional, Tuple
 import os
 import sys
 from dataclasses import asdict, dataclass
@@ -33,24 +40,186 @@ class TrainConfig:
   enable_nan_guard: bool = False
 
 
+
+def _slugify_local_wandb(s: str) -> str:
+    """Mirror local_wandb's slugify logic (must match for path lookups)."""
+    out = []
+    for ch in s.strip():
+        if ch.isalnum() or ch in ("-", "_"):
+            out.append(ch.lower())
+        else:
+            out.append("-")
+    slug = []
+    prev_dash = False
+    for ch in out:
+        if ch == "-" and prev_dash:
+            continue
+        prev_dash = (ch == "-")
+        slug.append(ch)
+    return "".join(slug).strip("-") or "unnamed"
+
+
+def _parse_registry_name(registry_name: str) -> Tuple[str, str, str]:
+    """
+    Parse strings like:
+      - "motions/my_collection:latest"
+      - "wandb-registry-motions/my_collection:latest"
+      - "entity/project/motions/my_collection:alias"
+    Returns (type, name, alias).
+    """
+    # Ensure alias component exists for uniformity
+    if ":" not in registry_name:
+        registry_name = registry_name + ":latest"
+
+    # Keep only the last two path segments before the alias, in case entity/project are present
+    # Example: "entity/project/motions/foo:bar" -> "motions/foo:bar"
+    m = re.search(r"([^/:]+)/([^/:]+):([^/:]+)$", registry_name)
+    if not m:
+        raise ValueError(f"Unrecognized registry name format: {registry_name}")
+    type_or_regprefix, name, alias = m.group(1), m.group(2), m.group(3)
+
+    # Accept either "motions" or "wandb-registry-motions"
+    if type_or_regprefix.startswith("wandb-registry-"):
+        art_type = type_or_regprefix.replace("wandb-registry-", "", 1)
+    else:
+        art_type = type_or_regprefix
+
+    return _slugify_local_wandb(art_type), _slugify_local_wandb(name), alias
+
+
+def _find_latest_linked_artifact(art_type: str, art_name: str, base_dir: Path) -> Optional[Path]:
+    """
+    Search all runs under base_dir for a registry link pointing to
+    artifacts/<art_type>/<art_name>/...npz. Prefer the newest linked_at.
+    """
+    best_path: Optional[Path] = None
+    best_ts: float = -1.0
+
+    # Search pattern: <base>/<project>/<run>/registry/**/link.json
+    for project_dir in base_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for run_dir in project_dir.iterdir():
+            if not run_dir.is_dir():
+                continue
+            reg_dir = run_dir / "registry"
+            if not reg_dir.is_dir():
+                continue
+
+            # Look at all link.json files
+            for link in reg_dir.rglob("link.json"):
+                try:
+                    with open(link, "r") as f:
+                        meta = json.load(f)
+                except Exception:
+                    continue
+                uri = str(meta.get("artifact_uri", "")).replace("\\", "/")
+                linked_at = float(meta.get("linked_at", 0.0))
+
+                # Expect something like: artifacts/<type>/<name>/motion.npz
+                needle = f"artifacts/{art_type}/{art_name}/"
+                if needle in uri:
+                    run_root = run_dir
+                    artifact_file = (run_root / uri).resolve()
+                    # Prefer the registry file itself if it exists (copy/symlink target),
+                    # else fall back to original artifact file path.
+                    registry_dir = link.parent
+                    # try to pick the .npz right next to link.json (copy/symlink destination)
+                    candidates = list(registry_dir.glob("*.npz"))
+                    candidate_path = candidates[0] if candidates else artifact_file
+                    if candidate_path.exists() and linked_at >= best_ts:
+                        best_ts = linked_at
+                        best_path = candidate_path
+
+    return best_path
+
+
+def _fallback_find_artifact_file(art_type: str, art_name: str, base_dir: Path) -> Optional[Path]:
+    """
+    If no registry link exists, try raw artifact store:
+    <base>/<project>/<run>/artifacts/<type>/<name>/*.npz (newest mtime wins).
+    """
+    best_path: Optional[Path] = None
+    best_mtime: float = -1.0
+
+    for project_dir in base_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for run_dir in project_dir.iterdir():
+            if not run_dir.is_dir():
+                continue
+            art_dir = run_dir / "artifacts" / art_type / art_name
+            if not art_dir.is_dir():
+                continue
+            for f in art_dir.glob("*.npz"):
+                try:
+                    mt = f.stat().st_mtime
+                except Exception:
+                    continue
+                if mt >= best_mtime:
+                    best_mtime = mt
+                    best_path = f.resolve()
+    return best_path
+
+
+def resolve_local_wandb_artifact_path(registry_name: str, *, env_var: str = "LOCAL_WANDB_DIR") -> Path:
+    """
+    Resolve a local_wandb artifact file (.npz) given a W&B-like registry name.
+    Also accepts a direct filesystem path (file or directory) for convenience.
+    """
+    # 1) If user passed a direct path, use it.
+    p = Path(registry_name)
+    if p.exists():
+        if p.is_dir():
+            # e.g., a directory containing "motion.npz"
+            candidate = p / "motion.npz"
+            if candidate.exists():
+                return candidate.resolve()
+            # fall back to the first npz in the directory
+            npzs = sorted(p.glob("*.npz"))
+            if npzs:
+                return npzs[0].resolve()
+            raise FileNotFoundError(f"No .npz found in directory: {p}")
+        else:
+            # direct file
+            return p.resolve()
+
+    # 2) Parse W&B-like name and search the local_wandb store
+    art_type, art_name, _alias = _parse_registry_name(registry_name)
+    base_dir = Path(os.getenv(env_var, "./local_wandb")).resolve()
+    if not base_dir.exists():
+        raise FileNotFoundError(
+            f"Local W&B directory not found: {base_dir} (set {env_var} to override)"
+        )
+
+    path = _find_latest_linked_artifact(art_type, art_name, base_dir)
+    if path is None:
+        path = _fallback_find_artifact_file(art_type, art_name, base_dir)
+    if path is None:
+        raise FileNotFoundError(
+            f"Could not locate artifact '{art_type}/{art_name}' in {base_dir}. "
+            f"Make sure it was logged with local_wandb."
+        )
+    return path
+
+
 def run_train(task: str, cfg: TrainConfig) -> None:
   configure_torch_backends()
 
   registry_name: str | None = None
 
+
   if isinstance(cfg.env, TrackingEnvCfg):
-    if not cfg.registry_name:
-      raise ValueError("Must provide --registry-name for tracking tasks.")
+      if not cfg.registry_name:
+          raise ValueError("Must provide --registry-name for tracking tasks.")
 
-    # Check if the registry name includes alias, if not, append ":latest".
-    registry_name = cast(str, cfg.registry_name)
-    if ":" not in registry_name:
-      registry_name = registry_name + ":latest"
-    import wandb
+      registry_name = cast(str, cfg.registry_name)
+      if ":" not in registry_name:
+          registry_name = registry_name + ":latest"
 
-    api = wandb.Api()
-    artifact = api.artifact(registry_name)
-    cfg.env.commands.motion.motion_file = str(Path(artifact.download()) / "motion.npz")
+      # Resolve from local_wandb store (or direct path)
+      motion_npz_path = resolve_local_wandb_artifact_path(registry_name)
+      cfg.env.commands.motion.motion_file = str(motion_npz_path)
 
   # Enable NaN guard if requested
   if cfg.enable_nan_guard:
