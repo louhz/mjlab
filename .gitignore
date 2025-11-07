@@ -14,3 +14,5 @@ motions/
 artifacts/
 .venv/
 render_robots.py
+robot_urdf*
+exp_1
