@@ -9,7 +9,6 @@ import torch
 from prettytable import PrettyTable
 
 from mjlab.managers.manager_base import ManagerBase, ManagerTermBase
-from mjlab.utils.dataclasses import get_terms
 
 if TYPE_CHECKING:
   from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -86,7 +85,7 @@ class CommandTerm(ManagerTermBase):
 class CommandManager(ManagerBase):
   _env: ManagerBasedRlEnv
 
-  def __init__(self, cfg: object, env: ManagerBasedRlEnv):
+  def __init__(self, cfg: dict[str, CommandTermCfg], env: ManagerBasedRlEnv):
     self._terms: dict[str, CommandTerm] = dict()
 
     self.cfg = cfg
@@ -143,11 +142,11 @@ class CommandManager(ManagerBase):
   def get_term(self, name: str) -> CommandTerm:
     return self._terms[name]
 
-  def _prepare_terms(self):
-    from mjlab.managers.manager_term_config import CommandTermCfg
+  def get_term_cfg(self, name: str) -> CommandTermCfg:
+    return self.cfg[name]
 
-    cfg_items = get_terms(self.cfg, CommandTermCfg).items()
-    for term_name, term_cfg in cfg_items:
+  def _prepare_terms(self):
+    for term_name, term_cfg in self.cfg.items():
       term_cfg: CommandTermCfg | None
       if term_cfg is None:
         print(f"term: {term_name} set to None, skipping...")
@@ -192,4 +191,7 @@ class NullCommandManager:
     return None
 
   def get_term(self, name: str) -> None:
+    return None
+
+  def get_term_cfg(self, name: str) -> None:
     return None

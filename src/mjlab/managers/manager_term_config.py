@@ -1,20 +1,17 @@
 from __future__ import annotations
 
+import abc
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 
-from mjlab.managers.action_manager import ActionTerm
 from mjlab.managers.command_manager import CommandTerm
 from mjlab.utils.noise.noise_cfg import NoiseCfg, NoiseModelCfg
 
-P = ParamSpec("P")
-T = TypeVar("T")
-
-
-def term(term_cls: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
-  return field(default_factory=lambda: term_cls(*args, **kwargs))
+if TYPE_CHECKING:
+  from mjlab.envs import ManagerBasedRlEnv
+  from mjlab.managers.action_manager import ActionTerm
 
 
 @dataclass
@@ -29,12 +26,16 @@ class ManagerTermBaseCfg:
 
 
 @dataclass(kw_only=True)
-class ActionTermCfg:
+class ActionTermCfg(abc.ABC):
   """Configuration for an action term."""
 
-  class_type: type[ActionTerm]
-  asset_name: str
+  entity_name: str
   clip: dict[str, tuple] | None = None
+
+  @abc.abstractmethod
+  def build(self, env: ManagerBasedRlEnv) -> ActionTerm:
+    """Build the action term from this config."""
+    raise NotImplementedError
 
 
 ##
@@ -77,6 +78,9 @@ class EventTermCfg(ManagerTermBaseCfg):
   interval_range_s: tuple[float, float] | None = None
   is_global_time: bool = False
   min_step_count_between_reset: int = 0
+  domain_randomization: bool = False
+  """Whether this event term performs domain randomization. If True, the field
+  name (from params["field"]) will be tracked for domain randomization purposes."""
 
 
 ##
@@ -118,13 +122,21 @@ class ObservationTermCfg(ManagerTermBaseCfg):
   history_length: int = 0
   """Number of past observations to keep in history. 0 = no history."""
   flatten_history_dim: bool = True
-  """Whether to flatten the history dimension into observation."""
+  """Whether to flatten the history dimension into observation.
+
+  When True and concatenate_terms=True, uses term-major ordering:
+  [A_t0, A_t1, ..., A_tH-1, B_t0, B_t1, ..., B_tH-1, ...]
+  See docs/api/observation_history_delay.md for details on ordering."""
 
 
 @dataclass
 class ObservationGroupCfg:
-  """Configuration for an observation group."""
+  """Configuration for an observation group.
 
+  The `terms` field contains a dictionary mapping term names to their configurations.
+  """
+
+  terms: dict[str, ObservationTermCfg]
   concatenate_terms: bool = True
   concatenate_dim: int = -1
   enable_corruption: bool = False

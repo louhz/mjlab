@@ -1,5 +1,6 @@
 """Observation manager for computing observations."""
 
+from copy import deepcopy
 from typing import Sequence
 
 import numpy as np
@@ -9,38 +10,32 @@ from prettytable import PrettyTable
 from mjlab.managers.manager_base import ManagerBase
 from mjlab.managers.manager_term_config import ObservationGroupCfg, ObservationTermCfg
 from mjlab.utils.buffers import CircularBuffer, DelayBuffer
-from mjlab.utils.dataclasses import get_terms
 from mjlab.utils.noise import noise_cfg, noise_model
 
 
 class ObservationManager(ManagerBase):
-  def __init__(self, cfg: object, env):
-    self.cfg = cfg
+  def __init__(self, cfg: dict[str, ObservationGroupCfg], env):
+    self.cfg = deepcopy(cfg)
     super().__init__(env=env)
 
     self._group_obs_dim: dict[str, tuple[int, ...] | list[tuple[int, ...]]] = dict()
 
     for group_name, group_term_dims in self._group_obs_term_dim.items():
       if self._group_obs_concatenate[group_name]:
-        try:
-          term_dims = torch.stack(
-            [torch.tensor(dims, device="cpu") for dims in group_term_dims], dim=0
-          )
-          if len(term_dims.shape) > 1:
-            if self._group_obs_concatenate_dim[group_name] >= 0:
-              dim = self._group_obs_concatenate_dim[group_name] - 1
-            else:
-              dim = self._group_obs_concatenate_dim[group_name]
-            dim_sum = torch.sum(term_dims[:, dim], dim=0)
-            term_dims[0, dim] = dim_sum
-            term_dims = term_dims[0]
+        term_dims = torch.stack(
+          [torch.tensor(dims, device="cpu") for dims in group_term_dims], dim=0
+        )
+        if len(term_dims.shape) > 1:
+          if self._group_obs_concatenate_dim[group_name] >= 0:
+            dim = self._group_obs_concatenate_dim[group_name] - 1
           else:
-            term_dims = torch.sum(term_dims, dim=0)
-          self._group_obs_dim[group_name] = tuple(term_dims.tolist())
-        except RuntimeError:
-          raise RuntimeError(
-            f"Unable to concatenate observation terms in group {group_name}."
-          ) from None
+            dim = self._group_obs_concatenate_dim[group_name]
+          dim_sum = torch.sum(term_dims[:, dim], dim=0)
+          term_dims[0, dim] = dim_sum
+          term_dims = term_dims[0]
+        else:
+          term_dims = torch.sum(term_dims, dim=0)
+        self._group_obs_dim[group_name] = tuple(term_dims.tolist())
       else:
         self._group_obs_dim[group_name] = group_term_dims
 
@@ -89,7 +84,7 @@ class ObservationManager(ManagerBase):
         buffers = obs_buffer[group_name]
         assert isinstance(buffers, dict)
         for name, term in buffers.items():
-          terms.append((group_name + "-" + name, term[env_idx].cpu().tolist()))
+          terms.append((group_name + "-" + name, term[env_idx].cpu().tolist()))  # type: ignore[unsupported-operator]
         continue
 
       idx = 0
@@ -127,7 +122,18 @@ class ObservationManager(ManagerBase):
 
   # Methods.
 
+  def get_term_cfg(self, group_name: str, term_name: str) -> ObservationTermCfg:
+    if group_name not in self._group_obs_term_names:
+      raise ValueError(f"Group '{group_name}' not found in active groups.")
+    if term_name not in self._group_obs_term_names[group_name]:
+      raise ValueError(f"Term '{term_name}' not found in group '{group_name}'.")
+    index = self._group_obs_term_names[group_name].index(term_name)
+    return self._group_obs_term_cfgs[group_name][index]
+
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> dict[str, float]:
+    # Invalidate cache since reset envs will have different observations.
+    self._obs_buffer = None
+
     for group_name, group_cfg in self._group_obs_class_term_cfgs.items():
       for term_cfg in group_cfg:
         term_cfg.func.reset(env_ids=env_ids)
@@ -148,6 +154,12 @@ class ObservationManager(ManagerBase):
   def compute(
     self, update_history: bool = False
   ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
+    # Return cached observations if not updating and cache exists.
+    # This prevents double-pushing to delay buffers when compute() is called
+    # multiple times per control step (e.g., in get_observations() after step()).
+    if not update_history and self._obs_buffer is not None:
+      return self._obs_buffer
+
     obs_buffer: dict[str, torch.Tensor | dict[str, torch.Tensor]] = dict()
     for group_name in self._group_obs_term_names:
       obs_buffer[group_name] = self.compute_group(group_name, update_history)
@@ -206,8 +218,7 @@ class ObservationManager(ManagerBase):
     self._group_obs_term_delay_buffer: dict[str, dict[str, DelayBuffer]] = dict()
     self._group_obs_term_history_buffer: dict[str, dict[str, CircularBuffer]] = dict()
 
-    group_cfg_items = get_terms(self.cfg, ObservationGroupCfg).items()
-    for group_name, group_cfg in group_cfg_items:
+    for group_name, group_cfg in self.cfg.items():
       group_cfg: ObservationGroupCfg | None
       if group_cfg is None:
         print(f"group: {group_name} set to None, skipping...")
@@ -227,13 +238,15 @@ class ObservationManager(ManagerBase):
         else group_cfg.concatenate_dim
       )
 
-      group_cfg_items = get_terms(group_cfg, ObservationTermCfg).items()
-      for term_name, term_cfg in group_cfg_items:
+      for term_name, term_cfg in group_cfg.terms.items():
         term_cfg: ObservationTermCfg | None
         if term_cfg is None:
           print(f"term: {term_name} set to None, skipping...")
           continue
 
+        # NOTE: This deepcopy is important to avoid cross-group contamination of term
+        # configs.
+        term_cfg = deepcopy(term_cfg)
         self._resolve_common_term_cfg(term_name, term_cfg)
 
         if not group_cfg.enable_corruption:

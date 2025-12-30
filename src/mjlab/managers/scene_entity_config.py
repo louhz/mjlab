@@ -22,6 +22,9 @@ _FIELD_CONFIGS = [
   _FieldConfig("body_names", "body_ids", "find_bodies", "num_bodies", "body"),
   _FieldConfig("geom_names", "geom_ids", "find_geoms", "num_geoms", "geom"),
   _FieldConfig("site_names", "site_ids", "find_sites", "num_sites", "site"),
+  _FieldConfig(
+    "actuator_names", "actuator_ids", "find_actuators", "num_actuators", "actuator"
+  ),
 ]
 
 
@@ -35,31 +38,36 @@ class SceneEntityCfg:
 
   Attributes:
     name: The name of the entity in the scene.
-    joint_names: Names of joints to include. Can be a single string or list.
+    joint_names: Names of joints to include. Can be a single string or tuple.
     joint_ids: IDs of joints to include. Can be a list or slice.
-    body_names: Names of bodies to include. Can be a single string or list.
+    body_names: Names of bodies to include. Can be a single string or tuple.
     body_ids: IDs of bodies to include. Can be a list or slice.
-    geom_names: Names of geometries to include. Can be a single string or list.
+    geom_names: Names of geometries to include. Can be a single string or tuple.
     geom_ids: IDs of geometries to include. Can be a list or slice.
-    site_names: Names of sites to include. Can be a single string or list.
+    site_names: Names of sites to include. Can be a single string or tuple.
     site_ids: IDs of sites to include. Can be a list or slice.
+    actuator_names: Names of actuators to include. Can be a single string or list.
+    actuator_ids: IDs of actuators to include. Can be a list or slice.
     preserve_order: If True, maintains the order of components as specified. If False,
       allows reordering for optimization.
   """
 
   name: str
 
-  joint_names: str | list[str] | None = None
+  joint_names: str | tuple[str, ...] | None = None
   joint_ids: list[int] | slice = field(default_factory=lambda: slice(None))
 
-  body_names: str | list[str] | None = None
+  body_names: str | tuple[str, ...] | None = None
   body_ids: list[int] | slice = field(default_factory=lambda: slice(None))
 
-  geom_names: str | list[str] | None = None
+  geom_names: str | tuple[str, ...] | None = None
   geom_ids: list[int] | slice = field(default_factory=lambda: slice(None))
 
-  site_names: str | list[str] | None = None
+  site_names: str | tuple[str, ...] | None = None
   site_ids: list[int] | slice = field(default_factory=lambda: slice(None))
+
+  actuator_names: str | list[str] | None = None
+  actuator_ids: list[int] | slice = field(default_factory=lambda: slice(None))
 
   preserve_order: bool = False
 

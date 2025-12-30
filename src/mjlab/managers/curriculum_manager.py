@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Sequence
 
 import torch
@@ -9,7 +10,6 @@ from prettytable import PrettyTable
 
 from mjlab.managers.manager_base import ManagerBase
 from mjlab.managers.manager_term_config import CurriculumTermCfg
-from mjlab.utils.dataclasses import get_terms
 
 if TYPE_CHECKING:
   from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -18,12 +18,12 @@ if TYPE_CHECKING:
 class CurriculumManager(ManagerBase):
   _env: ManagerBasedRlEnv
 
-  def __init__(self, cfg: object, env: ManagerBasedRlEnv):
+  def __init__(self, cfg: dict[str, CurriculumTermCfg], env: ManagerBasedRlEnv):
     self._term_names: list[str] = list()
     self._term_cfgs: list[CurriculumTermCfg] = list()
     self._class_term_cfgs: list[CurriculumTermCfg] = list()
 
-    self.cfg = cfg
+    self.cfg = deepcopy(cfg)
     super().__init__(env)
 
     self._curriculum_state = dict()
@@ -47,6 +47,13 @@ class CurriculumManager(ManagerBase):
   @property
   def active_terms(self) -> list[str]:
     return self._term_names
+
+  # Methods.
+
+  def get_term_cfg(self, term_name: str) -> CurriculumTermCfg:
+    if term_name not in self._term_names:
+      raise ValueError(f"Term '{term_name}' not found in active terms.")
+    return self._term_cfgs[self._term_names.index(term_name)]
 
   def get_active_iterable_terms(
     self, env_idx: int
@@ -92,8 +99,7 @@ class CurriculumManager(ManagerBase):
       self._curriculum_state[name] = state
 
   def _prepare_terms(self):
-    cfg_items = get_terms(self.cfg, CurriculumTermCfg).items()
-    for term_name, term_cfg in cfg_items:
+    for term_name, term_cfg in self.cfg.items():
       term_cfg: CurriculumTermCfg | None
       if term_cfg is None:
         print(f"term: {term_name} set to None, skipping...")

@@ -3,16 +3,16 @@ from __future__ import annotations
 import copy
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import mujoco
 import numpy as np
 import torch
 
 from mjlab.managers import CommandTerm, CommandTermCfg
-from mjlab.third_party.isaaclab.isaaclab.utils.math import (
+from mjlab.utils.lab_api.math import (
+  matrix_from_quat,
   quat_apply,
-  quat_apply_inverse,
   quat_error_magnitude,
   quat_from_euler_xyz,
   quat_inv,
@@ -25,6 +25,8 @@ from mjlab.viewer.debug_visualizer import DebugVisualizer
 if TYPE_CHECKING:
   from mjlab.entity import Entity
   from mjlab.envs import ManagerBasedRlEnv
+
+_DESIRED_FRAME_COLORS = ((1.0, 0.5, 0.5), (0.5, 1.0, 0.5), (0.5, 0.5, 1.0))
 
 
 class MotionLoader:
@@ -73,7 +75,7 @@ class MotionCommand(CommandTerm):
   def __init__(self, cfg: MotionCommandCfg, env: ManagerBasedRlEnv):
     super().__init__(cfg, env)
 
-    self.robot: Entity = env.scene[cfg.asset_name]
+    self.robot: Entity = env.scene[cfg.entity_name]
     self.robot_anchor_body_index = self.robot.body_names.index(
       self.cfg.anchor_body_name
     )
@@ -296,10 +298,21 @@ class MotionCommand(CommandTerm):
     self.metrics["sampling_top1_prob"][:] = pmax
     self.metrics["sampling_top1_bin"][:] = imax.float() / self.bin_count
 
+  def _uniform_sampling(self, env_ids: torch.Tensor):
+    self.time_steps[env_ids] = torch.randint(
+      0, self.motion.time_step_total, (len(env_ids),), device=self.device
+    )
+    self.metrics["sampling_entropy"][:] = 1.0  # Maximum entropy for uniform.
+    self.metrics["sampling_top1_prob"][:] = 1.0 / self.bin_count
+    self.metrics["sampling_top1_bin"][:] = 0.5  # No specific bin preference.
+
   def _resample_command(self, env_ids: torch.Tensor):
-    if self.cfg.disable_adaptive_sampling:
+    if self.cfg.sampling_mode == "start":
       self.time_steps[env_ids] = 0
+    elif self.cfg.sampling_mode == "uniform":
+      self._uniform_sampling(env_ids)
     else:
+      assert self.cfg.sampling_mode == "adaptive"
       self._adaptive_sampling(env_ids)
 
     root_pos = self.body_pos_w[:, 0].clone()
@@ -353,7 +366,7 @@ class MotionCommand(CommandTerm):
         root_pos[env_ids],
         root_ori[env_ids],
         root_lin_vel[env_ids],
-        quat_apply_inverse(root_ori[env_ids], root_ang_vel[env_ids]),
+        root_ang_vel[env_ids],
       ],
       dim=-1,
     )
@@ -391,37 +404,86 @@ class MotionCommand(CommandTerm):
       delta_ori_w, self.body_pos_w - anchor_pos_w_repeat
     )
 
-    self.bin_failed_count = (
-      self.cfg.adaptive_alpha * self._current_bin_failed
-      + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
-    )
-    self._current_bin_failed.zero_()
+    if self.cfg.sampling_mode == "adaptive":
+      self.bin_failed_count = (
+        self.cfg.adaptive_alpha * self._current_bin_failed
+        + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
+      )
+      self._current_bin_failed.zero_()
 
   def _debug_vis_impl(self, visualizer: DebugVisualizer) -> None:
-    """Draw ghost robot at target pose."""
-    if self._ghost_model is None:
-      self._ghost_model = copy.deepcopy(self._env.sim.mj_model)
-      self._ghost_model.geom_rgba[:] = self._ghost_color
+    """Draw ghost robot or frames based on visualization mode."""
+    if self.cfg.viz.mode == "ghost":
+      if self._ghost_model is None:
+        self._ghost_model = copy.deepcopy(self._env.sim.mj_model)
+        self._ghost_model.geom_rgba[:] = self._ghost_color
 
-    entity: Entity = self._env.scene[self.cfg.asset_name]
-    indexing = entity.indexing
-    free_joint_q_adr = indexing.free_joint_q_adr.cpu().numpy()
-    joint_q_adr = indexing.joint_q_adr.cpu().numpy()
+      entity: Entity = self._env.scene[self.cfg.entity_name]
+      indexing = entity.indexing
+      free_joint_q_adr = indexing.free_joint_q_adr.cpu().numpy()
+      joint_q_adr = indexing.joint_q_adr.cpu().numpy()
 
-    qpos = np.zeros(self._env.sim.mj_model.nq)
-    qpos[free_joint_q_adr[:3]] = self.body_pos_w[visualizer.env_idx, 0].cpu().numpy()
-    qpos[free_joint_q_adr[3:7]] = self.body_quat_w[visualizer.env_idx, 0].cpu().numpy()
-    qpos[joint_q_adr] = self.joint_pos[visualizer.env_idx].cpu().numpy()
+      qpos = np.zeros(self._env.sim.mj_model.nq)
+      qpos[free_joint_q_adr[0:3]] = self.body_pos_w[visualizer.env_idx, 0].cpu().numpy()
+      qpos[free_joint_q_adr[3:7]] = (
+        self.body_quat_w[visualizer.env_idx, 0].cpu().numpy()
+      )
+      qpos[joint_q_adr] = self.joint_pos[visualizer.env_idx].cpu().numpy()
 
-    visualizer.add_ghost_mesh(qpos, model=self._ghost_model)
+      visualizer.add_ghost_mesh(qpos, model=self._ghost_model)
+
+    elif self.cfg.viz.mode == "frames":
+      desired_body_pos = self.body_pos_w[visualizer.env_idx].cpu().numpy()
+      desired_body_quat = self.body_quat_w[visualizer.env_idx]
+      desired_body_rotm = matrix_from_quat(desired_body_quat).cpu().numpy()
+
+      current_body_pos = self.robot_body_pos_w[visualizer.env_idx].cpu().numpy()
+      current_body_quat = self.robot_body_quat_w[visualizer.env_idx]
+      current_body_rotm = matrix_from_quat(current_body_quat).cpu().numpy()
+
+      for i, body_name in enumerate(self.cfg.body_names):
+        visualizer.add_frame(
+          position=desired_body_pos[i],
+          rotation_matrix=desired_body_rotm[i],
+          scale=0.08,
+          label=f"desired_{body_name}",
+          axis_colors=_DESIRED_FRAME_COLORS,
+        )
+        visualizer.add_frame(
+          position=current_body_pos[i],
+          rotation_matrix=current_body_rotm[i],
+          scale=0.12,
+          label=f"current_{body_name}",
+        )
+
+      desired_anchor_pos = self.anchor_pos_w[visualizer.env_idx].cpu().numpy()
+      desired_anchor_quat = self.anchor_quat_w[visualizer.env_idx]
+      desired_rotation_matrix = matrix_from_quat(desired_anchor_quat).cpu().numpy()
+      visualizer.add_frame(
+        position=desired_anchor_pos,
+        rotation_matrix=desired_rotation_matrix,
+        scale=0.1,
+        label="desired_anchor",
+        axis_colors=_DESIRED_FRAME_COLORS,
+      )
+
+      current_anchor_pos = self.robot_anchor_pos_w[visualizer.env_idx].cpu().numpy()
+      current_anchor_quat = self.robot_anchor_quat_w[visualizer.env_idx]
+      current_rotation_matrix = matrix_from_quat(current_anchor_quat).cpu().numpy()
+      visualizer.add_frame(
+        position=current_anchor_pos,
+        rotation_matrix=current_rotation_matrix,
+        scale=0.15,
+        label="current_anchor",
+      )
 
 
 @dataclass(kw_only=True)
 class MotionCommandCfg(CommandTermCfg):
   motion_file: str
   anchor_body_name: str
-  body_names: list[str]
-  asset_name: str
+  body_names: tuple[str, ...]
+  entity_name: str
   class_type: type[CommandTerm] = MotionCommand
   pose_range: dict[str, tuple[float, float]] = field(default_factory=dict)
   velocity_range: dict[str, tuple[float, float]] = field(default_factory=dict)
@@ -430,10 +492,11 @@ class MotionCommandCfg(CommandTermCfg):
   adaptive_lambda: float = 0.8
   adaptive_uniform_ratio: float = 0.1
   adaptive_alpha: float = 0.001
-  disable_adaptive_sampling: bool = False
+  sampling_mode: Literal["adaptive", "uniform", "start"] = "adaptive"
 
   @dataclass
   class VizCfg:
-    ghost_color: tuple[float, float, float, float] = (0.5, 0.7, 0.5, 0.5)  # RGBA
+    mode: Literal["ghost", "frames"] = "ghost"
+    ghost_color: tuple[float, float, float, float] = (0.5, 0.7, 0.5, 0.5)
 
   viz: VizCfg = field(default_factory=VizCfg)

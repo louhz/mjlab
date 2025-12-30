@@ -9,20 +9,23 @@ import torch
 from prettytable import PrettyTable
 
 from mjlab.managers.manager_base import ManagerBase, ManagerTermBase
-from mjlab.utils.dataclasses import get_terms
 
 if TYPE_CHECKING:
-  from mjlab.envs.manager_based_env import ManagerBasedEnv
+  from mjlab.envs import ManagerBasedRlEnv
   from mjlab.managers.manager_term_config import ActionTermCfg
 
 
 class ActionTerm(ManagerTermBase):
-  """Base class for action terms."""
+  """Base class for action terms.
 
-  def __init__(self, cfg: ActionTermCfg, env: ManagerBasedEnv):
+  The action term is responsible for processing the raw actions sent to the environment
+  and applying them to the entity managed by the term.
+  """
+
+  def __init__(self, cfg: ActionTermCfg, env: ManagerBasedRlEnv):
     self.cfg = cfg
     super().__init__(env)
-    self._asset = self._env.scene[self.cfg.asset_name]
+    self._entity = self._env.scene[self.cfg.entity_name]
 
   @property
   @abc.abstractmethod
@@ -44,7 +47,7 @@ class ActionTerm(ManagerTermBase):
 
 
 class ActionManager(ManagerBase):
-  def __init__(self, cfg: object, env: ManagerBasedEnv):
+  def __init__(self, cfg: dict[str, ActionTermCfg], env: ManagerBasedRlEnv):
     self.cfg = cfg
     super().__init__(env=env)
 
@@ -53,6 +56,7 @@ class ActionManager(ManagerBase):
       (self.num_envs, self.total_action_dim), device=self.device
     )
     self._prev_action = torch.zeros_like(self._action)
+    self._prev_prev_action = torch.zeros_like(self._action)
 
   def __str__(self) -> str:
     msg = f"<ActionManager> contains {len(self._term_names)} active terms.\n"
@@ -86,6 +90,10 @@ class ActionManager(ManagerBase):
     return self._prev_action
 
   @property
+  def prev_prev_action(self) -> torch.Tensor:
+    return self._prev_prev_action
+
+  @property
   def active_terms(self) -> list[str]:
     return self._term_names
 
@@ -99,6 +107,7 @@ class ActionManager(ManagerBase):
       env_ids = slice(None)
     # Reset action history.
     self._prev_action[env_ids] = 0.0
+    self._prev_prev_action[env_ids] = 0.0
     self._action[env_ids] = 0.0
     # Reset action terms.
     for term in self._terms.values():
@@ -110,6 +119,7 @@ class ActionManager(ManagerBase):
       raise ValueError(
         f"Invalid action shape, expected: {self.total_action_dim}, received: {action.shape[1]}."
       )
+    self._prev_prev_action[:] = self._prev_action
     self._prev_action[:] = self._action
     self._action[:] = action.to(self.device)
     # Split and apply.
@@ -138,14 +148,11 @@ class ActionManager(ManagerBase):
     self._term_names: list[str] = list()
     self._terms: dict[str, ActionTerm] = dict()
 
-    from mjlab.managers.manager_term_config import ActionTermCfg
-
-    cfg_items = get_terms(self.cfg, ActionTermCfg).items()
-    for term_name, term_cfg in cfg_items:
+    for term_name, term_cfg in self.cfg.items():
       term_cfg: ActionTermCfg | None
       if term_cfg is None:
         print(f"term: {term_name} set to None, skipping...")
         continue
-      term = term_cfg.class_type(term_cfg, self._env)
+      term = term_cfg.build(self._env)
       self._term_names.append(term_name)
       self._terms[term_name] = term

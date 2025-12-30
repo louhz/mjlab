@@ -7,12 +7,20 @@ MUJOCO_LOG.TXT
 debug.py
 .vscode/
 *.ipynb_checkpoints/
-*.ipynb
 motions/
 *_rerun*
 *.mp4
 artifacts/
 .venv/
 render_robots.py
+<<<<<<< HEAD
 robot_urdf*
 exp_1
+=======
+benchmark_results/
+
+# Documentation outputs.
+**/_build/*
+**/generated/*
+
+>>>>>>> 18764564cdf3b77fe4719b26e986ab099b93c6ba

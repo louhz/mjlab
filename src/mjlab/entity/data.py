@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Sequence
 import mujoco_warp as mjwarp
 import torch
 
-from mjlab.third_party.isaaclab.isaaclab.utils.math import (
+from mjlab.utils.lab_api.math import (
   quat_apply,
   quat_apply_inverse,
   quat_from_matrix,
@@ -33,7 +33,13 @@ def compute_velocity_from_cvel(
 
 @dataclass
 class EntityData:
-  """Data container for an entity."""
+  """Data container for an entity.
+
+  Note: Write methods (write_*) modify state directly. Read properties (e.g.,
+  root_link_pose_w) require sim.forward() to be current. If you write then read,
+  call sim.forward() in between. Event order matters when mixing reads and writes.
+  All inputs/outputs use world frame.
+  """
 
   indexing: EntityIndexing
   data: mjwarp.Data
@@ -43,8 +49,6 @@ class EntityData:
   default_root_state: torch.Tensor
   default_joint_pos: torch.Tensor
   default_joint_vel: torch.Tensor
-  default_joint_stiffness: torch.Tensor
-  default_joint_damping: torch.Tensor
 
   default_joint_pos_limits: torch.Tensor
   joint_pos_limits: torch.Tensor
@@ -56,6 +60,18 @@ class EntityData:
   is_fixed_base: bool
   is_articulated: bool
   is_actuated: bool
+
+  joint_pos_target: torch.Tensor
+  joint_vel_target: torch.Tensor
+  joint_effort_target: torch.Tensor
+
+  tendon_len_target: torch.Tensor
+  tendon_vel_target: torch.Tensor
+  tendon_effort_target: torch.Tensor
+
+  site_effort_target: torch.Tensor
+
+  encoder_bias: torch.Tensor
 
   # State dimensions.
   POS_DIM = 3
@@ -94,7 +110,10 @@ class EntityData:
     assert velocity.shape[-1] == self.ROOT_VEL_DIM
 
     env_ids = self._resolve_env_ids(env_ids)
-    self.data.qvel[env_ids, self.indexing.free_joint_v_adr] = velocity
+    quat_w = self.data.qpos[env_ids, self.indexing.free_joint_q_adr[3:7]]
+    ang_vel_b = quat_apply_inverse(quat_w, velocity[:, 3:])
+    velocity_qvel = torch.cat([velocity[:, :3], ang_vel_b], dim=-1)
+    self.data.qvel[env_ids, self.indexing.free_joint_v_adr] = velocity_qvel
 
   def write_joint_state(
     self,
@@ -174,19 +193,19 @@ class EntityData:
     assert pose.shape[-1] == self.ROOT_POSE_DIM
 
     env_ids = self._resolve_env_ids(env_ids)
-    self.data.mocap_pos[env_ids, self.indexing.mocap_id] = pose[:, 0:3]
-    self.data.mocap_quat[env_ids, self.indexing.mocap_id] = pose[:, 3:7]
+    self.data.mocap_pos[env_ids, self.indexing.mocap_id] = pose[:, 0:3].unsqueeze(1)
+    self.data.mocap_quat[env_ids, self.indexing.mocap_id] = pose[:, 3:7].unsqueeze(1)
 
   def clear_state(self, env_ids: torch.Tensor | slice | None = None) -> None:
-    # Reset external wrenches on bodies and DoFs.
-    env_ids = self._resolve_env_ids(env_ids)
-    v_slice = self.indexing.free_joint_v_adr
-    self.data.qfrc_applied[env_ids, v_slice] = 0.0
-    self.data.xfrc_applied[env_ids, self.indexing.body_ids] = 0.0
-
-    # Reset control inputs.
     if self.is_actuated:
-      self.data.ctrl[env_ids, self.indexing.ctrl_ids] = 0.0
+      env_ids = self._resolve_env_ids(env_ids)
+      self.joint_pos_target[env_ids] = 0.0
+      self.joint_vel_target[env_ids] = 0.0
+      self.joint_effort_target[env_ids] = 0.0
+      self.tendon_len_target[env_ids] = 0.0
+      self.tendon_vel_target[env_ids] = 0.0
+      self.tendon_effort_target[env_ids] = 0.0
+      self.site_effort_target[env_ids] = 0.0
 
   def _resolve_env_ids(
     self, env_ids: torch.Tensor | slice | None
@@ -226,7 +245,7 @@ class EntityData:
     quat = self.data.xquat[:, self.indexing.root_body_id]
     body_iquat = self.model.body_iquat[:, self.indexing.root_body_id]
     assert body_iquat is not None
-    quat_w = quat_mul(quat, body_iquat[None])
+    quat_w = quat_mul(quat, body_iquat.squeeze(1))
     return torch.cat([pos_w, quat_w], dim=-1)
 
   @property
@@ -321,8 +340,13 @@ class EntityData:
 
   @property
   def joint_pos(self) -> torch.Tensor:
-    """Joint positions. Shape (num_envs, nv)"""
+    """Joint positions. Shape (num_envs, num_joints)."""
     return self.data.qpos[:, self.indexing.joint_q_adr]
+
+  @property
+  def joint_pos_biased(self) -> torch.Tensor:
+    """Joint positions with encoder bias applied. Shape (num_envs, num_joints)."""
+    return self.joint_pos + self.encoder_bias
 
   @property
   def joint_vel(self) -> torch.Tensor:
@@ -333,6 +357,18 @@ class EntityData:
   def joint_acc(self) -> torch.Tensor:
     """Joint accelerations. Shape (num_envs, nv)."""
     return self.data.qacc[:, self.indexing.joint_v_adr]
+
+  # Tendon properties
+
+  @property
+  def tendon_len(self) -> torch.Tensor:
+    """Tendon lengths. Shape (num_envs, num_tendons)."""
+    return self.data.ten_length[:, self.indexing.tendon_ids]
+
+  @property
+  def tendon_vel(self) -> torch.Tensor:
+    """Tendon velocities. Shape (num_envs, num_tendons)."""
+    return self.data.ten_velocity[:, self.indexing.tendon_ids]
 
   @property
   def joint_torques(self) -> torch.Tensor:
@@ -352,14 +388,6 @@ class EntityData:
   def generalized_force(self) -> torch.Tensor:
     """Generalized forces applied to the DoFs. Shape (num_envs, nv)."""
     return self.data.qfrc_applied[:, self.indexing.free_joint_v_adr]
-
-  @property
-  def sensor_data(self) -> dict[str, torch.Tensor]:
-    """Sensor data. The number of keys is equal to model.nsensor."""
-    sensor_data = {}
-    for name, indices in self.indexing.sensor_adr.items():
-      sensor_data[name] = self.data.sensordata[:, indices]
-    return sensor_data
 
   # Pose and velocity component accessors.
 

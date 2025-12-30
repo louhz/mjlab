@@ -5,10 +5,11 @@ from pathlib import Path
 import mujoco
 
 from mjlab import MJLAB_SRC_PATH
+from mjlab.actuator import BuiltinPositionActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mjlab.utils.actuator import ElectricActuator, reflected_inertia
 from mjlab.utils.os import update_assets
-from mjlab.utils.spec_config import ActuatorCfg, CollisionCfg
+from mjlab.utils.spec_config import CollisionCfg
 
 ##
 # MJCF and assets.
@@ -65,18 +66,18 @@ DAMPING_HIP = 2 * DAMPING_RATIO * HIP_ACTUATOR.reflected_inertia * NATURAL_FREQ
 STIFFNESS_KNEE = KNEE_ACTUATOR.reflected_inertia * NATURAL_FREQ**2
 DAMPING_KNEE = 2 * DAMPING_RATIO * KNEE_ACTUATOR.reflected_inertia * NATURAL_FREQ
 
-GO1_HIP_ACTUATOR_CFG = ActuatorCfg(
-  joint_names_expr=[".*_hip_joint", ".*_thigh_joint"],
-  effort_limit=HIP_ACTUATOR.effort_limit,
+GO1_HIP_ACTUATOR_CFG = BuiltinPositionActuatorCfg(
+  target_names_expr=(".*_hip_joint", ".*_thigh_joint"),
   stiffness=STIFFNESS_HIP,
   damping=DAMPING_HIP,
+  effort_limit=HIP_ACTUATOR.effort_limit,
   armature=HIP_ACTUATOR.reflected_inertia,
 )
-GO1_KNEE_ACTUATOR_CFG = ActuatorCfg(
-  joint_names_expr=[".*_calf_joint"],
-  effort_limit=KNEE_ACTUATOR.effort_limit,
+GO1_KNEE_ACTUATOR_CFG = BuiltinPositionActuatorCfg(
+  target_names_expr=(".*_calf_joint",),
   stiffness=STIFFNESS_KNEE,
   damping=DAMPING_KNEE,
+  effort_limit=KNEE_ACTUATOR.effort_limit,
   armature=KNEE_ACTUATOR.reflected_inertia,
 )
 
@@ -105,7 +106,7 @@ _foot_regex = "^[FR][LR]_foot_collision$"
 # This disables all collisions except the feet.
 # Furthermore, feet self collisions are disabled.
 FEET_ONLY_COLLISION = CollisionCfg(
-  geom_names_expr=[_foot_regex],
+  geom_names_expr=(_foot_regex,),
   contype=0,
   conaffinity=1,
   condim=3,
@@ -117,7 +118,7 @@ FEET_ONLY_COLLISION = CollisionCfg(
 # This enables all collisions, excluding self collisions.
 # Foot collisions are given custom condim, friction and solimp.
 FULL_COLLISION = CollisionCfg(
-  geom_names_expr=[".*_collision"],
+  geom_names_expr=(".*_collision",),
   condim={_foot_regex: 3, ".*_collision": 1},
   priority={_foot_regex: 1},
   friction={_foot_regex: (0.6,)},
@@ -138,22 +139,37 @@ GO1_ARTICULATION = EntityArticulationInfoCfg(
   soft_joint_pos_limit_factor=0.9,
 )
 
-GO1_ROBOT_CFG = EntityCfg(
-  init_state=INIT_STATE,
-  collisions=(FULL_COLLISION,),
-  spec_fn=get_spec,
-  articulation=GO1_ARTICULATION,
-)
+
+def get_go1_robot_cfg() -> EntityCfg:
+  """Get a fresh Go1 robot configuration instance.
+
+  Returns a new EntityCfg instance each time to avoid mutation issues when
+  the config is shared across multiple places.
+  """
+  return EntityCfg(
+    init_state=INIT_STATE,
+    collisions=(FULL_COLLISION,),
+    spec_fn=get_spec,
+    articulation=GO1_ARTICULATION,
+  )
+
 
 GO1_ACTION_SCALE: dict[str, float] = {}
 for a in GO1_ARTICULATION.actuators:
+  assert isinstance(a, BuiltinPositionActuatorCfg)
   e = a.effort_limit
   s = a.stiffness
-  names = a.joint_names_expr
-  if not isinstance(e, dict):
-    e = {n: e for n in names}
-  if not isinstance(s, dict):
-    s = {n: s for n in names}
+  names = a.target_names_expr
+  assert e is not None
   for n in names:
-    if n in e and n in s and s[n]:
-      GO1_ACTION_SCALE[n] = 0.25 * e[n] / s[n]
+    GO1_ACTION_SCALE[n] = 0.25 * e / s
+
+
+if __name__ == "__main__":
+  import mujoco.viewer as viewer
+
+  from mjlab.entity.entity import Entity
+
+  robot = Entity(get_go1_robot_cfg())
+
+  viewer.launch(robot.spec.compile())

@@ -1,41 +1,24 @@
-import gymnasium as gym
+from mjlab.tasks.registry import register_mjlab_task
+from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
 
-gym.register(
-  id="Mjlab-Velocity-Rough-Unitree-Go1",
-  entry_point="mjlab.envs:ManagerBasedRlEnv",
-  disable_env_checker=True,
-  kwargs={
-    "env_cfg_entry_point": f"{__name__}.rough_env_cfg:UnitreeGo1RoughEnvCfg",
-    "rl_cfg_entry_point": f"{__name__}.rl_cfg:UnitreeGo1PPORunnerCfg",
-  },
+from .env_cfgs import (
+  unitree_go1_flat_env_cfg,
+  unitree_go1_rough_env_cfg,
+)
+from .rl_cfg import unitree_go1_ppo_runner_cfg
+
+register_mjlab_task(
+  task_id="Mjlab-Velocity-Rough-Unitree-Go1",
+  env_cfg=unitree_go1_rough_env_cfg(),
+  play_env_cfg=unitree_go1_rough_env_cfg(play=True),
+  rl_cfg=unitree_go1_ppo_runner_cfg(),
+  runner_cls=VelocityOnPolicyRunner,
 )
 
-gym.register(
-  id="Mjlab-Velocity-Rough-Unitree-Go1-Play",
-  entry_point="mjlab.envs:ManagerBasedRlEnv",
-  disable_env_checker=True,
-  kwargs={
-    "env_cfg_entry_point": f"{__name__}.rough_env_cfg:UnitreeGo1RoughEnvCfg_PLAY",
-    "rl_cfg_entry_point": f"{__name__}.rl_cfg:UnitreeGo1PPORunnerCfg",
-  },
-)
-
-gym.register(
-  id="Mjlab-Velocity-Flat-Unitree-Go1",
-  entry_point="mjlab.envs:ManagerBasedRlEnv",
-  disable_env_checker=True,
-  kwargs={
-    "env_cfg_entry_point": f"{__name__}.flat_env_cfg:UnitreeGo1FlatEnvCfg",
-    "rl_cfg_entry_point": f"{__name__}.rl_cfg:UnitreeGo1PPORunnerCfg",
-  },
-)
-
-gym.register(
-  id="Mjlab-Velocity-Flat-Unitree-Go1-Play",
-  entry_point="mjlab.envs:ManagerBasedRlEnv",
-  disable_env_checker=True,
-  kwargs={
-    "env_cfg_entry_point": f"{__name__}.flat_env_cfg:UnitreeGo1FlatEnvCfg_PLAY",
-    "rl_cfg_entry_point": f"{__name__}.rl_cfg:UnitreeGo1PPORunnerCfg",
-  },
+register_mjlab_task(
+  task_id="Mjlab-Velocity-Flat-Unitree-Go1",
+  env_cfg=unitree_go1_flat_env_cfg(),
+  play_env_cfg=unitree_go1_flat_env_cfg(play=True),
+  rl_cfg=unitree_go1_ppo_runner_cfg(),
+  runner_cls=VelocityOnPolicyRunner,
 )

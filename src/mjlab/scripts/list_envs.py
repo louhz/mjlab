@@ -1,39 +1,47 @@
-"""Script to list MJLab environments."""
+"""Script to list mjlab environments."""
 
-import gymnasium as gym
+import tyro
 from prettytable import PrettyTable
 
-import mjlab.tasks  # noqa: F401 to register environments
+import mjlab.tasks  # noqa: F401
+from mjlab.tasks.registry import list_tasks
 
 
-def main():
-  """Print all environments registered whose id contains `Mjlab-`."""
-  prefix_substring = "Mjlab-"
+def list_environments(keyword: str | None = None):
+  """List all registered environments.
 
-  table = PrettyTable(["#", "Task ID", "Entry Point", "env_cfg_entry_point"])
-  table.title = "Available Environments in Mjlab"
+  Args:
+    keyword: Optional filter to only show environments containing this keyword.
+  """
+  table = PrettyTable(["#", "Task ID"])
+  table.title = "Available Environments in mjlab"
   table.align["Task ID"] = "l"
-  table.align["Entry Point"] = "l"
-  table.align["env_cfg_entry_point"] = "l"
 
+  all_tasks = list_tasks()
   idx = 0
-  for spec in gym.registry.values():
+  for task_id in all_tasks:
     try:
-      if prefix_substring in spec.id:
-        env_cfg_ep = spec.kwargs.get("env_cfg_entry_point", "")
-        table.add_row([idx + 1, spec.id, spec.entry_point, env_cfg_ep])
-        idx += 1
+      # Optionally filter by keyword.
+      if keyword and keyword.lower() not in task_id.lower():
+        continue
+
+      table.add_row([idx + 1, task_id])
+      idx += 1
     except Exception:
       continue
 
   print(table)
   if idx == 0:
-    print(f"[INFO] No tasks matched filter: '{prefix_substring}'")
+    msg = "[INFO] No tasks matched"
+    if keyword:
+      msg += f" keyword '{keyword}'"
+    print(msg)
   return idx
 
 
+def main():
+  return tyro.cli(list_environments)
+
+
 if __name__ == "__main__":
-  try:
-    main()
-  except Exception as e:
-    raise RuntimeError(f"Error listing environments: {e}") from e
+  main()

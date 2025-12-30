@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import TYPE_CHECKING
 
 import torch
@@ -9,7 +10,6 @@ from prettytable import PrettyTable
 
 from mjlab.managers.manager_base import ManagerBase
 from mjlab.managers.manager_term_config import RewardTermCfg
-from mjlab.utils.dataclasses import get_terms
 
 if TYPE_CHECKING:
   from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -18,12 +18,12 @@ if TYPE_CHECKING:
 class RewardManager(ManagerBase):
   _env: ManagerBasedRlEnv
 
-  def __init__(self, cfg: object, env: ManagerBasedRlEnv):
+  def __init__(self, cfg: dict[str, RewardTermCfg], env: ManagerBasedRlEnv):
     self._term_names: list[str] = list()
     self._term_cfgs: list[RewardTermCfg] = list()
     self._class_term_cfgs: list[RewardTermCfg] = list()
 
-    self.cfg = cfg
+    self.cfg = deepcopy(cfg)
     super().__init__(env=env)
     self._episode_sums = dict()
     for term_name in self._term_names:
@@ -83,6 +83,8 @@ class RewardManager(ManagerBase):
         self._step_reward[:, term_idx] = 0.0
         continue
       value = term_cfg.func(self._env, **term_cfg.params) * term_cfg.weight * dt
+      # NaN/Inf can occur from corrupted physics state; zero them to avoid policy crash.
+      value = torch.nan_to_num(value, nan=0.0, posinf=0.0, neginf=0.0)
       self._reward_buf += value
       self._episode_sums[name] += value
       self._step_reward[:, term_idx] = value / dt
@@ -100,8 +102,7 @@ class RewardManager(ManagerBase):
     return self._term_cfgs[self._term_names.index(term_name)]
 
   def _prepare_terms(self):
-    cfg_items = get_terms(self.cfg, RewardTermCfg).items()
-    for term_name, term_cfg in cfg_items:
+    for term_name, term_cfg in self.cfg.items():
       term_cfg: RewardTermCfg | None
       if term_cfg is None:
         print(f"term: {term_name} set to None, skipping...")

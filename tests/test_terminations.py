@@ -1,6 +1,5 @@
 """Tests for MDP termination functions."""
 
-from dataclasses import dataclass, field
 from unittest.mock import Mock
 
 import mujoco
@@ -61,22 +60,16 @@ def test_nan_detection_function(mock_env_with_sim):
   result = nan_detection(env)
   assert result[1] and result[3] and not result[0] and not result[2]
 
-  env.sim.close()
-
 
 def test_nan_detection_with_termination_manager(mock_env_with_sim):
   """Test that nan_detection is properly logged by termination manager."""
   env = mock_env_with_sim
 
-  @dataclass
-  class TestTerminationsCfg:
-    nan_term: TerminationTermCfg = field(
-      default_factory=lambda: TerminationTermCfg(
-        func=nan_detection, params={}, time_out=False
-      )
-    )
+  cfg = {
+    "nan_term": TerminationTermCfg(func=nan_detection, params={}, time_out=False),
+  }
 
-  manager = TerminationManager(TestTerminationsCfg(), env)
+  manager = TerminationManager(cfg, env)
 
   # No terminations initially.
   result = manager.compute()
@@ -108,5 +101,3 @@ def test_nan_detection_with_termination_manager(mock_env_with_sim):
   # Reset should log multiple terminations.
   reset_info = manager.reset(torch.tensor([0, 2], device=env.device))
   assert reset_info["Episode_Termination/nan_term"] == 2
-
-  env.sim.close()

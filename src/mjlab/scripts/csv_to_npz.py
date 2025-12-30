@@ -8,10 +8,9 @@ from tqdm import tqdm
 from mjlab.entity import Entity
 from mjlab.scene import Scene
 from mjlab.sim.sim import Simulation, SimulationCfg
-from mjlab.tasks.tracking.config.g1.flat_env_cfg import G1FlatEnvCfg
-from mjlab.third_party.isaaclab.isaaclab.utils.math import (
+from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
+from mjlab.utils.lab_api.math import (
   axis_angle_from_quat,
-  quat_apply_inverse,
   quat_conjugate,
   quat_mul,
   quat_slerp,
@@ -249,7 +248,7 @@ def run_sim(
     root_states[:, :2] += scene.env_origins[:, :2]
     root_states[:, 3:7] = motion_base_rot
     root_states[:, 7:10] = motion_base_lin_vel
-    root_states[:, 10:] = quat_apply_inverse(motion_base_rot, motion_base_ang_vel)
+    root_states[:, 10:] = motion_base_ang_vel
     robot.write_root_state_to_sim(root_states)
 
     joint_pos = robot.data.default_joint_pos.clone()
@@ -312,9 +311,7 @@ def run_sim(
         import local_wandb as wandb
 
         COLLECTION = output_name
-        run = wandb.init(
-          project="csv_to_npz", name=COLLECTION, entity="gcbc_researchers"
-        )
+        run = wandb.init(project="csv_to_npz", name=COLLECTION)
         print(f"[INFO]: Logging motion to wandb: {COLLECTION}")
         REGISTRY = "motions"
         logged_artifact = run.log_artifact(
@@ -362,7 +359,7 @@ def main(
   sim_cfg = SimulationCfg()
   sim_cfg.mujoco.timestep = 1.0 / output_fps
 
-  scene = Scene(G1FlatEnvCfg().scene, device=device)
+  scene = Scene(unitree_g1_flat_tracking_env_cfg().scene, device=device)
   model = scene.compile()
 
   sim = Simulation(num_envs=1, cfg=sim_cfg, model=model, device=device)

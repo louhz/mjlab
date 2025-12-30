@@ -1,23 +1,20 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 import torch
 
-from mjlab.entity import Entity
-from mjlab.managers.scene_entity_config import SceneEntityCfg
-from mjlab.third_party.isaaclab.isaaclab.utils.math import quat_error_magnitude
+from mjlab.sensor import ContactSensor
+from mjlab.utils.lab_api.math import quat_error_magnitude
 
 from .commands import MotionCommand
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
 
-_DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
-
 
 def _get_body_indexes(
-  command: MotionCommand, body_names: Optional[list[str]]
+  command: MotionCommand, body_names: tuple[str, ...] | None
 ) -> list[int]:
   return [
     i
@@ -48,7 +45,7 @@ def motion_relative_body_position_error_exp(
   env: ManagerBasedRlEnv,
   command_name: str,
   std: float,
-  body_names: Optional[list[str]] = None,
+  body_names: tuple[str, ...] | None = None,
 ) -> torch.Tensor:
   command = cast(MotionCommand, env.command_manager.get_term(command_name))
   body_indexes = _get_body_indexes(command, body_names)
@@ -66,7 +63,7 @@ def motion_relative_body_orientation_error_exp(
   env: ManagerBasedRlEnv,
   command_name: str,
   std: float,
-  body_names: Optional[list[str]] = None,
+  body_names: tuple[str, ...] | None = None,
 ) -> torch.Tensor:
   command = cast(MotionCommand, env.command_manager.get_term(command_name))
   body_indexes = _get_body_indexes(command, body_names)
@@ -84,7 +81,7 @@ def motion_global_body_linear_velocity_error_exp(
   env: ManagerBasedRlEnv,
   command_name: str,
   std: float,
-  body_names: Optional[list[str]] = None,
+  body_names: tuple[str, ...] | None = None,
 ) -> torch.Tensor:
   command = cast(MotionCommand, env.command_manager.get_term(command_name))
   body_indexes = _get_body_indexes(command, body_names)
@@ -102,7 +99,7 @@ def motion_global_body_angular_velocity_error_exp(
   env: ManagerBasedRlEnv,
   command_name: str,
   std: float,
-  body_names: Optional[list[str]] = None,
+  body_names: tuple[str, ...] | None = None,
 ) -> torch.Tensor:
   command = cast(MotionCommand, env.command_manager.get_term(command_name))
   body_indexes = _get_body_indexes(command, body_names)
@@ -116,24 +113,8 @@ def motion_global_body_angular_velocity_error_exp(
   return torch.exp(-error.mean(-1) / std**2)
 
 
-def self_collision_cost(
-  env: ManagerBasedRlEnv,
-  sensor_name: str,
-  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
-) -> torch.Tensor:
+def self_collision_cost(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
   """Cost that returns the number of self-collisions detected by a sensor."""
-  asset: Entity = env.scene[asset_cfg.name]
-  if sensor_name not in asset.sensor_names:
-    raise ValueError(
-      f"Sensor '{sensor_name}' not found in asset '{asset_cfg.name}'. "
-      f"Available sensors: {asset.sensor_names}"
-    )
-  # Contact sensor is configured to return max_contacts slots, where the size of each
-  # slot is determined by the `data` field in the sensor config.
-  # With data='found' and reduce='netforce', only the first slot will be positive
-  # if there is any contact and the value will be the number of contacts detected, up
-  # to max_contacts.
-  # See https://mujoco.readthedocs.io/en/latest/XMLreference.html#sensor-contact for
-  # more details.
-  contact_data = asset.data.sensor_data[sensor_name]  # (num_envs, max_contacts x 1)
-  return contact_data[..., 0]  # (num_envs,)
+  sensor: ContactSensor = env.scene[sensor_name]
+  assert sensor.data.found is not None
+  return sensor.data.found.squeeze(-1)

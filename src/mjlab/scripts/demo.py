@@ -12,7 +12,7 @@ from mjlab.scripts.play import PlayConfig, run_play
 
 def main() -> None:
   """Run demo with pretrained tracking policy."""
-  print("🎮 Setting up MJLab demo with pretrained tracking policy...")
+  print("🎮 Setting up mjlab demo with pretrained tracking policy...")
 
   try:
     checkpoint_path = ensure_default_checkpoint()
@@ -22,16 +22,17 @@ def main() -> None:
     print("Please check your internet connection and try again.")
     return
 
-  play_config = PlayConfig(
-    checkpoint_file=checkpoint_path,
-    motion_file=motion_path,
-    num_envs=8,
-    viewer="viser",
+  args = tyro.cli(
+    PlayConfig,
+    default=PlayConfig(
+      checkpoint_file=checkpoint_path,
+      motion_file=motion_path,
+      num_envs=8,
+      viewer="viser",
+      _demo_mode=True,
+    ),
   )
-
-  args = tyro.cli(PlayConfig, default=play_config)
-
-  run_play("Mjlab-Tracking-Flat-Unitree-G1-Play", args)
+  run_play("Mjlab-Tracking-Flat-Unitree-G1", args)
 
 
 if __name__ == "__main__":
