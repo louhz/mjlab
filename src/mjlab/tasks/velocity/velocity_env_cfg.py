@@ -9,17 +9,14 @@ from dataclasses import replace
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
-from mjlab.managers.manager_term_config import (
-  ActionTermCfg,
-  CommandTermCfg,
-  CurriculumTermCfg,
-  EventTermCfg,
-  ObservationGroupCfg,
-  ObservationTermCfg,
-  RewardTermCfg,
-  TerminationTermCfg,
-)
+from mjlab.managers.action_manager import ActionTermCfg
+from mjlab.managers.command_manager import CommandTermCfg
+from mjlab.managers.curriculum_manager import CurriculumTermCfg
+from mjlab.managers.event_manager import EventTermCfg
+from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
+from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.scene import SceneCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.tasks.velocity import mdp
@@ -144,7 +141,12 @@ def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
       func=mdp.reset_root_state_uniform,
       mode="reset",
       params={
-        "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+        "pose_range": {
+          "x": (-0.5, 0.5),
+          "y": (-0.5, 0.5),
+          "z": (0.01, 0.05),
+          "yaw": (-3.14, 3.14),
+        },
         "velocity_range": {},
       },
     ),
@@ -161,7 +163,16 @@ def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
       func=mdp.push_by_setting_velocity,
       mode="interval",
       interval_range_s=(1.0, 3.0),
-      params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+      params={
+        "velocity_range": {
+          "x": (-0.5, 0.5),
+          "y": (-0.5, 0.5),
+          "z": (-0.4, 0.4),
+          "roll": (-0.52, 0.52),
+          "pitch": (-0.52, 0.52),
+          "yaw": (-0.78, 0.78),
+        },
+      },
     ),
     "foot_friction": EventTermCfg(
       mode="startup",
@@ -172,6 +183,29 @@ def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
         "operation": "abs",
         "field": "geom_friction",
         "ranges": (0.3, 1.2),
+      },
+    ),
+    "encoder_bias": EventTermCfg(
+      mode="startup",
+      func=mdp.randomize_encoder_bias,
+      params={
+        "asset_cfg": SceneEntityCfg("robot"),
+        "bias_range": (-0.015, 0.015),
+      },
+    ),
+    "base_com": EventTermCfg(
+      mode="startup",
+      func=mdp.randomize_field,
+      domain_randomization=True,
+      params={
+        "asset_cfg": SceneEntityCfg("robot", body_names=()),  # Set per-robot.
+        "operation": "add",
+        "field": "body_ipos",
+        "ranges": {
+          0: (-0.025, 0.025),
+          1: (-0.025, 0.025),
+          2: (-0.03, 0.03),
+        },
       },
     ),
   }
@@ -342,7 +376,7 @@ def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
     ),
     sim=SimulationCfg(
       nconmax=35,
-      njmax=300,
+      njmax=1500,
       mujoco=MujocoCfg(
         timestep=0.005,
         iterations=10,

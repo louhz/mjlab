@@ -251,10 +251,8 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
           raise ValueError("Must provide --registry-name for tracking tasks.")
 =======
   # Check if this is a tracking task by checking for motion command.
-  is_tracking_task = (
-    cfg.env.commands is not None
-    and "motion" in cfg.env.commands
-    and isinstance(cfg.env.commands["motion"], MotionCommandCfg)
+  is_tracking_task = "motion" in cfg.env.commands and isinstance(
+    cfg.env.commands["motion"], MotionCommandCfg
   )
 
   if is_tracking_task:
@@ -275,7 +273,6 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
     artifact = api.artifact(registry_name)
 >>>>>>> 18764564cdf3b77fe4719b26e986ab099b93c6ba
 
-    assert cfg.env.commands is not None
     motion_cmd = cfg.env.commands["motion"]
     assert isinstance(motion_cmd, MotionCommandCfg)
     motion_cmd.motion_file = str(Path(artifact.download()) / "motion.npz")

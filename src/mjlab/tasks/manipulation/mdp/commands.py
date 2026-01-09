@@ -7,8 +7,7 @@ from typing import TYPE_CHECKING, Literal
 import torch
 
 from mjlab.entity import Entity
-from mjlab.managers.command_manager import CommandTerm
-from mjlab.managers.manager_term_config import CommandTermCfg
+from mjlab.managers.command_manager import CommandTerm, CommandTermCfg
 from mjlab.utils.lab_api.math import (
   quat_from_euler_xyz,
   sample_uniform,
@@ -118,7 +117,6 @@ class LiftingCommand(CommandTerm):
 @dataclass(kw_only=True)
 class LiftingCommandCfg(CommandTermCfg):
   entity_name: str
-  class_type: type[CommandTerm] = LiftingCommand
   success_threshold: float = 0.05
   difficulty: Literal["fixed", "dynamic"] = "fixed"
 
@@ -153,3 +151,6 @@ class LiftingCommandCfg(CommandTermCfg):
     target_color: tuple[float, float, float, float] = (1.0, 0.5, 0.0, 0.3)
 
   viz: VizCfg = field(default_factory=VizCfg)
+
+  def build(self, env: ManagerBasedRlEnv) -> LiftingCommand:
+    return LiftingCommand(self, env)
